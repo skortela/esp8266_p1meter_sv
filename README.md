@@ -1,6 +1,6 @@
 # esp8266_p1meter
 
-Software for the ESP2866 that sends P1 smart meter data to an mqtt broker (with OTA firmware updates)
+Software for the ESP8266 that sends P1 smart meter data to an mqtt broker (with OTA firmware updates)
 
 ## about this fork
 This fork adds support for the `Landys and Gyr E360` smartmeter in Sweden.
