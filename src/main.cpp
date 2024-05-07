@@ -22,6 +22,9 @@ WiFiClient espClient;
 // * Initiate MQTT client
 PubSubClient mqtt_client(espClient);
 
+void tick();
+void processLine(int len);
+
 // **********************************
 // * WIFI                           *
 // **********************************

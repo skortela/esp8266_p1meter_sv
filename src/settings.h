@@ -18,7 +18,7 @@
 #define P1_MAXLINELENGTH 1050
 
 // * The hostname of our little creature
-#define HOSTNAME "p1meter"
+#define HOSTNAME "sensors/power/p1meter"
 
 // * The password used for OTA
 #define OTA_PASSWORD "default"
@@ -30,7 +30,7 @@
 #define MQTT_MAX_RECONNECT_TRIES 10
 
 // * MQTT root topic
-#define MQTT_ROOT_TOPIC "sensors/power/p1meter"
+#define MQTT_ROOT_TOPIC "p1meter"
 
 // * MQTT Last reconnection counter
 long LAST_RECONNECT_ATTEMPT = 0;
