@@ -663,7 +663,7 @@ void setup()
 
     // * Fetches SSID and pass and tries to connect
     // * Reset when no connection after 10 seconds
-    if (!wifiManager.autoConnect())
+    if (!wifiManager.autoConnect(HOSTNAME))
     {
         Serial.println(F("Failed to connect to WIFI and hit timeout"));
 
