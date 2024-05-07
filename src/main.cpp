@@ -83,16 +83,15 @@ bool mqtt_reconnect()
         MQTT_RECONNECT_RETRIES++;
         Serial.printf("MQTT connection attempt %d / %d ...\n", MQTT_RECONNECT_RETRIES, MQTT_MAX_RECONNECT_TRIES);
 
+        String availability = String(MQTT_ROOT_TOPIC) + String("/availability");
+
         // * Attempt to connect
-        if (mqtt_client.connect(HOSTNAME, MQTT_USER, MQTT_PASS))
+        if (mqtt_client.connect(HOSTNAME, MQTT_USER, MQTT_PASS, availability.c_str() , MQTTQOS0, true, "offline"))
         {
             Serial.println(F("MQTT connected!"));
 
             // * Once connected, publish an announcement...
-            char *message = new char[16 + strlen(HOSTNAME) + 1];
-            strcpy(message, "p1 meter alive: ");
-            strcat(message, HOSTNAME);
-            mqtt_client.publish("hass/status", message);
+            mqtt_client.publish(availability.c_str(), "online", true);
 
             Serial.printf("MQTT root topic: %s\n", MQTT_ROOT_TOPIC);
         }
