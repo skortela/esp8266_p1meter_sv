@@ -116,15 +116,15 @@ bool mqtt_reconnect()
     return true;
 }
 
-void send_metric(String name, long metric)
+void send_metric(String name, double metric)
 {
     Serial.print(F("Sending metric to broker: "));
     Serial.print(name);
     Serial.print(F("="));
     Serial.println(metric);
 
-    char output[10];
-    ltoa(metric, output, sizeof(output));
+    char output[20];
+    dtostrf(metric, 1, 3, output); // Convert double to string with 3 decimal places
 
     String topic = String(MQTT_ROOT_TOPIC) + "/" + name;
     send_mqtt_message(topic.c_str(), output);
@@ -132,6 +132,10 @@ void send_metric(String name, long metric)
 
 void send_data_to_broker()
 {
+#ifdef SEND_AS_JSON
+    String topic = String(MQTT_ROOT_TOPIC) + "/state";
+    send_mqtt_message(topic.c_str(), telegramJson);
+#else
     send_metric("consumption", CONSUMPTION);
     send_metric("returndelivery", RETURNDELIVERY);
     send_metric("consumption_reactive", CONSUMPTION_REACT);
@@ -161,7 +165,7 @@ void send_data_to_broker()
     send_metric("l1_instant_power_current", L1_INSTANT_POWER_CURRENT);
     send_metric("l2_instant_power_current", L2_INSTANT_POWER_CURRENT);
     send_metric("l3_instant_power_current", L3_INSTANT_POWER_CURRENT);
-    
+#endif
 }
 
 // **********************************
@@ -212,7 +216,7 @@ int FindCharInArrayRev(char array[], char c, int len)
     return -1;
 }
 
-long getValue(char *buffer, int maxlen, char startchar, char endchar)
+double getValue(char *buffer, int maxlen, char startchar, char endchar)
 {
     int s = FindCharInArrayRev(buffer, startchar, maxlen - 2);
     int l = FindCharInArrayRev(buffer, endchar, maxlen - 2) - s - 1;
@@ -225,8 +229,7 @@ long getValue(char *buffer, int maxlen, char startchar, char endchar)
         if (endchar == '*')
         {
             if (isNumber(res, l))
-                // * Lazy convert float to long
-                return (1000 * atof(res));
+                return (atof(res));
         }
         else if (endchar == ')')
         {
@@ -234,7 +237,25 @@ long getValue(char *buffer, int maxlen, char startchar, char endchar)
                 return atof(res);
         }
     }
+    
     return 0;
+}
+
+void addJson(const char* field, double value) {
+#ifdef SEND_AS_JSON
+    // Add comma if jsonPos > 2
+    if (jsonPos > 2) {
+        telegramJson[jsonPos++] = ','; // Add comma and update jsonPos
+    }
+
+    // Add {"field": "value"} to telegramJson buffer
+    int bytesWritten = snprintf(telegramJson + jsonPos, P1_MAXJSONLENGTH - jsonPos, "\"%s\": %.3f", field, value);
+
+    // Update jsonPos with the number of bytes written
+    if (bytesWritten >= 0 && bytesWritten < P1_MAXJSONLENGTH - jsonPos) {
+        jsonPos += bytesWritten;
+    }
+#endif
 }
 // parsing of telegram according to Swedish ESMR 5.0 implementation //UKR 1220
 bool decode_telegram(int len)
@@ -252,6 +273,10 @@ bool decode_telegram(int len)
     {
         // * Start found. Reset CRC calculation
         currentCRC = CRC16(0x0000,(unsigned char *) telegram+startChar, len-startChar);
+#ifdef SEND_AS_JSON
+        strcpy(telegramJson, "{");
+        jsonPos = strlen(telegramJson);
+#endif
     }
     else if (endChar >= 0)
     {
@@ -270,6 +295,10 @@ bool decode_telegram(int len)
             Serial.println(F("CRC Invalid!"));
 
         currentCRC = 0;
+#ifdef SEND_AS_JSON
+        strcpy(telegramJson + jsonPos, "}");
+        jsonPos = strlen(telegramJson);
+#endif
     }
     else
     {
@@ -281,6 +310,7 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:1.8.0", 9) == 0)
     {
         CONSUMPTION = getValue(telegram, len, '(', '*');
+        addJson("consumption", CONSUMPTION);
     }
 
     // 1-0:2.8.0(000560.157*kWh)
@@ -288,6 +318,7 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:2.8.0", 9) == 0)
     {
         RETURNDELIVERY = getValue(telegram, len, '(', '*');
+        addJson("returndelivery", RETURNDELIVERY);
     }
 
     // 1-0:3.8.0(000560.157*kWh)
@@ -295,6 +326,7 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:3.8.0", 9) == 0)
     {
         CONSUMPTION_REACT = getValue(telegram, len, '(', '*');
+        addJson("consumption_reactive", CONSUMPTION_REACT);
     }
 
     // 1-0:4.8.0(000560.157*kWh)
@@ -302,6 +334,7 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:4.8.0", 9) == 0)
     {
         RETURNDELIVERY_REACT = getValue(telegram, len, '(', '*');
+        addJson("returndelivery_reactive", RETURNDELIVERY_REACT);
     }
 
     // 1-0:1.7.0(00.424*kW)
@@ -309,6 +342,7 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:1.7.0", 9) == 0)
     {
         ACTUAL_CONSUMPTION = getValue(telegram, len, '(', '*');
+        addJson("actual_consumption", ACTUAL_CONSUMPTION);
     }
 
     // 1-0:2.7.0(00.000*kW) 
@@ -316,6 +350,7 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:2.7.0", 9) == 0)
     {
         ACTUAL_RETURNDELIVERY = getValue(telegram, len, '(', '*');
+        addJson("actual_returndelivery", ACTUAL_RETURNDELIVERY);
     }
 
     // 1-0:3.7.0(00.424*kW)
@@ -323,6 +358,7 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:3.7.0", 9) == 0)
     {
         ACTUAL_CONSUMPTION_REACT = getValue(telegram, len, '(', '*');
+        addJson("actual_consumption_reactive", ACTUAL_CONSUMPTION_REACT);
     }
 
     // 1-0:4.7.0(00.000*kW) 
@@ -330,6 +366,7 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:4.7.0", 9) == 0)
     {
         ACTUAL_RETURNDELIVERY_REACT = getValue(telegram, len, '(', '*');
+        addJson("actual_returndelivery_reactive", ACTUAL_RETURNDELIVERY_REACT);
     }
 
     // 1-0:21.7.0(00.378*kW)
@@ -337,6 +374,7 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:21.7.0", 10) == 0)
     {
         L1_INSTANT_POWER_USAGE = getValue(telegram, len, '(', '*');
+        addJson("l1_instant_power_usage", L1_INSTANT_POWER_USAGE);
     }
 
     // 1-0:22.7.0(00.378*kW)
@@ -344,6 +382,7 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:22.7.0", 10) == 0)
     {
         L1_INSTANT_POWER_DELIVERY = getValue(telegram, len, '(', '*');
+        addJson("l1_instant_power_delivery", L1_INSTANT_POWER_DELIVERY);
     }
 
     // 1-0:41.7.0(00.378*kW)
@@ -351,6 +390,7 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:41.7.0", 10) == 0)
     {
         L2_INSTANT_POWER_USAGE = getValue(telegram, len, '(', '*');
+        addJson("l2_instant_power_usage", L2_INSTANT_POWER_USAGE);
     }
 
     // 1-0:42.7.0(00.378*kW)
@@ -358,6 +398,7 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:42.7.0", 10) == 0)
     {
         L2_INSTANT_POWER_DELIVERY = getValue(telegram, len, '(', '*');
+        addJson("l2_instant_power_delivery", L2_INSTANT_POWER_DELIVERY);
     }
 
     // 1-0:61.7.0(00.378*kW)
@@ -365,6 +406,7 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:61.7.0", 10) == 0)
     {
         L3_INSTANT_POWER_USAGE = getValue(telegram, len, '(', '*');
+        addJson("l3_instant_power_usage", L3_INSTANT_POWER_USAGE);
     }
 
     // 1-0:62.7.0(00.378*kW)
@@ -372,6 +414,7 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:62.7.0", 10) == 0)
     {
         L3_INSTANT_POWER_DELIVERY = getValue(telegram, len, '(', '*');
+        addJson("l3_instant_power_delivery", L3_INSTANT_POWER_DELIVERY);
     }
 
     // 1-0:23.7.0(00.378*kW)
@@ -379,6 +422,7 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:23.7.0", 10) == 0)
     {
         L1_REACT_POWER_USAGE = getValue(telegram, len, '(', '*');
+        addJson("l1_reactive_power_usage", L1_REACT_POWER_USAGE);
     }
 
     // 1-0:24.7.0(00.378*kW)
@@ -386,6 +430,7 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:24.7.0", 10) == 0)
     {
         L1_REACT_POWER_DELIVERY = getValue(telegram, len, '(', '*');
+        addJson("l1_reactive_power_delivery", L1_REACT_POWER_DELIVERY);
     }
 
     // 1-0:43.7.0(00.378*kW)
@@ -393,6 +438,7 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:43.7.0", 10) == 0)
     {
         L2_REACT_POWER_USAGE = getValue(telegram, len, '(', '*');
+        addJson("l2_reactive_power_usage", L2_REACT_POWER_USAGE);
     }
 
     // 1-0:44.7.0(00.378*kW)
@@ -400,6 +446,7 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:44.7.0", 10) == 0)
     {
         L2_REACT_POWER_DELIVERY = getValue(telegram, len, '(', '*');
+        addJson("l2_reactive_power_delivery", L2_REACT_POWER_DELIVERY);
     }
 
     // 1-0:63.7.0(00.378*kW)
@@ -407,6 +454,7 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:63.7.0", 10) == 0)
     {
         L3_REACT_POWER_USAGE = getValue(telegram, len, '(', '*');
+        addJson("l3_reactive_power_usage", L3_REACT_POWER_USAGE);
     }
 
     // 1-0:64.7.0(00.378*kW)
@@ -414,6 +462,7 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:64.7.0", 10) == 0)
     {
         L3_REACT_POWER_DELIVERY = getValue(telegram, len, '(', '*');
+        addJson("l3_reactive_power_delivery", L3_REACT_POWER_DELIVERY);
     }
 
     // 1-0:31.7.0(002*A)
@@ -421,12 +470,14 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:31.7.0", 10) == 0)
     {
         L1_INSTANT_POWER_CURRENT = getValue(telegram, len, '(', '*');
+        addJson("l1_instant_power_current", L1_INSTANT_POWER_CURRENT);
     }
     // 1-0:51.7.0(002*A)
     // 1-0:51.7.0 = Momentary RMS Current phase L2
     if (strncmp(telegram, "1-0:51.7.0", 10) == 0)
     {
         L2_INSTANT_POWER_CURRENT = getValue(telegram, len, '(', '*');
+        addJson("l2_instant_power_current", L2_INSTANT_POWER_CURRENT);
     }
     
     // 1-0:71.7.0(002*A)
@@ -434,6 +485,7 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:71.7.0", 10) == 0)
     {
         L3_INSTANT_POWER_CURRENT = getValue(telegram, len, '(', '*');
+        addJson("l3_instant_power_current", L3_INSTANT_POWER_CURRENT);
     }
 
     // 1-0:32.7.0(232.0*V)
@@ -441,18 +493,21 @@ bool decode_telegram(int len)
     if (strncmp(telegram, "1-0:32.7.0", 10) == 0)
     {
         L1_VOLTAGE = getValue(telegram, len, '(', '*');
+        addJson("l1_voltage", L1_VOLTAGE);
     }
     // 1-0:52.7.0(232.0*V)
     // 1-0:52.7.0 = Momentary RMS Phase voltage L2
     if (strncmp(telegram, "1-0:52.7.0", 10) == 0)
     {
         L2_VOLTAGE = getValue(telegram, len, '(', '*');
+        addJson("l2_voltage", L2_VOLTAGE);
     }   
     // 1-0:72.7.0(232.0*V)
     // 1-0:72.7.0 = Momentary RMS Phase voltage L3
     if (strncmp(telegram, "1-0:72.7.0", 10) == 0)
     {
         L3_VOLTAGE = getValue(telegram, len, '(', '*');
+        addJson("l3_voltage", L3_VOLTAGE);
     }
 
     return validCRCFound;
@@ -707,6 +762,10 @@ void setup()
     // * Setup MQTT
     Serial.printf("MQTT connecting to: %s:%s\n", MQTT_HOST, MQTT_PORT);
 
+#ifdef SEND_AS_JSON
+    // increase default max size
+    mqtt_client.setBufferSize(P1_MAXJSONLENGTH);
+#endif
     mqtt_client.setServer(MQTT_HOST, atoi(MQTT_PORT));
 
 }
