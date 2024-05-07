@@ -621,6 +621,9 @@ void setup()
     // * Start ticker with 0.5 because we start in AP mode and try to connect
     ticker.attach(0.6, tick);
 
+    // Set hostname to be seen on DHCP
+    WiFi.hostname(HOSTNAME);
+
     // * Get MQTT Server settings
     String settings_available = read_eeprom(134, 1);
 
