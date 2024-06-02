@@ -14,6 +14,8 @@
 // #define SERIAL_RX RX
 // #define SERIAL_TX TX
 
+#define KResetPin D5
+
 //#define SEND_AS_JSON
 
 // * Max telegram length
@@ -30,66 +32,11 @@
 #define OTA_PASSWORD "default"
 
 // * Wifi timeout in milliseconds
-#define WIFI_TIMEOUT 30000
+#define WIFI_TIMEOUT 40000
 
 // * MQTT network settings
 #define MQTT_MAX_RECONNECT_TRIES 10
 
 // * MQTT root topic
-#define MQTT_ROOT_TOPIC "sensors/power/p1meter"
+#define MQTT_ROOT_TOPIC "energy_p1meter"
 
-// * MQTT Last reconnection counter
-long LAST_RECONNECT_ATTEMPT = 0;
-
-long LAST_UPDATE_SENT = 0;
-
-// * To be filled with EEPROM data
-char MQTT_HOST[64] = "";
-char MQTT_PORT[6]  = "";
-char MQTT_USER[32] = "";
-char MQTT_PASS[32] = "";
-
-// * Set to store received telegram
-char telegram[P1_MAXLINELENGTH];
-
-#ifdef SEND_AS_JSON
-char telegramJson[P1_MAXJSONLENGTH];
-int jsonPos=0;
-#endif
-
-// * Set to store the data values read
-double CONSUMPTION;
-double CONSUMPTION_REACT;
-
-double RETURNDELIVERY;
-double RETURNDELIVERY_REACT;
-
-double ACTUAL_CONSUMPTION;
-double ACTUAL_CONSUMPTION_REACT;
-
-double ACTUAL_RETURNDELIVERY;
-double ACTUAL_RETURNDELIVERY_REACT;
-
-double L1_INSTANT_POWER_USAGE;
-double L1_INSTANT_POWER_DELIVERY;
-double L2_INSTANT_POWER_USAGE;
-double L2_INSTANT_POWER_DELIVERY;
-double L3_INSTANT_POWER_USAGE;
-double L3_INSTANT_POWER_DELIVERY;
-
-double L1_REACT_POWER_USAGE;
-double L1_REACT_POWER_DELIVERY;
-double L2_REACT_POWER_USAGE;
-double L2_REACT_POWER_DELIVERY;
-double L3_REACT_POWER_USAGE;
-double L3_REACT_POWER_DELIVERY;
-
-double L1_INSTANT_POWER_CURRENT;
-double L2_INSTANT_POWER_CURRENT;
-double L3_INSTANT_POWER_CURRENT;
-double L1_VOLTAGE;
-double L2_VOLTAGE;
-double L3_VOLTAGE;
-
-// * Set during CRC checking
-unsigned int currentCRC = 0;

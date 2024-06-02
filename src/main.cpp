@@ -12,6 +12,7 @@
 
 // * Include settings
 #include "settings.h"
+#include "telegram.h"
 
 // * Initiate led blinker library
 Ticker ticker;
@@ -21,6 +22,32 @@ WiFiClient espClient;
 
 // * Initiate MQTT client
 PubSubClient mqtt_client(espClient);
+
+// * MQTT Last reconnection counter
+unsigned long LAST_RECONNECT_ATTEMPT = 0;
+
+unsigned long LAST_UPDATE_SENT = 0;
+
+// * To be filled with EEPROM data
+char MQTT_HOST[64] = "";
+char MQTT_PORT[6]  = "";
+char MQTT_USER[32] = "";
+char MQTT_PASS[32] = "";
+
+// * Set to store received telegram
+char telegram[P1_MAXLINELENGTH];
+
+#ifdef SEND_AS_JSON
+char telegramJson[P1_MAXJSONLENGTH];
+int jsonPos=0;
+#endif
+
+
+Telegram lastSendMsg;
+Telegram currentMsg;
+
+// * Set during CRC checking
+unsigned int currentCRC = 0;
 
 void tick();
 void processLine(int len);
@@ -83,10 +110,13 @@ bool mqtt_reconnect()
         MQTT_RECONNECT_RETRIES++;
         Serial.printf("MQTT connection attempt %d / %d ...\n", MQTT_RECONNECT_RETRIES, MQTT_MAX_RECONNECT_TRIES);
 
+        String clientId = HOSTNAME;
+        clientId += WiFi.macAddress();
+
         String availability = String(MQTT_ROOT_TOPIC) + String("/availability");
 
         // * Attempt to connect
-        if (mqtt_client.connect(HOSTNAME, MQTT_USER, MQTT_PASS, availability.c_str() , MQTTQOS0, true, "offline"))
+        if (mqtt_client.connect(clientId.c_str(), MQTT_USER, MQTT_PASS, availability.c_str() , MQTTQOS0, true, "offline"))
         {
             Serial.println(F("MQTT connected!"));
 
@@ -136,36 +166,97 @@ void send_data_to_broker()
     String topic = String(MQTT_ROOT_TOPIC) + "/state";
     send_mqtt_message(topic.c_str(), telegramJson);
 #else
-    send_metric("consumption", CONSUMPTION);
-    send_metric("returndelivery", RETURNDELIVERY);
-    send_metric("consumption_reactive", CONSUMPTION_REACT);
-    send_metric("returndelivery_reactive", RETURNDELIVERY_REACT);
-    send_metric("actual_consumption", ACTUAL_CONSUMPTION);
-    send_metric("actual_returndelivery", ACTUAL_RETURNDELIVERY);
-    send_metric("actual_consumption_reactive", ACTUAL_CONSUMPTION_REACT);
-    send_metric("actual_returndelivery_reactive", ACTUAL_RETURNDELIVERY_REACT);
+    bool forceSend = LAST_UPDATE_SENT == 0 || (unsigned long)(millis() - LAST_UPDATE_SENT) > UPDATE_INTERVAL;
+    if (forceSend) {
+        send_metric("consumption", currentMsg.CONSUMPTION);
+    }
+    if (forceSend) {
+        send_metric("returndelivery", currentMsg.RETURNDELIVERY);
+    }
+    if (forceSend) {
+        send_metric("consumption_reactive", currentMsg.CONSUMPTION_REACT);
+    }
+    if (forceSend) {
+        send_metric("returndelivery_reactive", currentMsg.RETURNDELIVERY_REACT);
+    }
+    if (forceSend || abs(lastSendMsg.ACTUAL_CONSUMPTION - currentMsg.ACTUAL_CONSUMPTION) > 0.005 ) {
+        send_metric("actual_consumption", currentMsg.ACTUAL_CONSUMPTION);
+    }
+    if (forceSend || abs(lastSendMsg.ACTUAL_RETURNDELIVERY - currentMsg.ACTUAL_RETURNDELIVERY) > 0.005 ) {
+        send_metric("actual_returndelivery", currentMsg.ACTUAL_RETURNDELIVERY);
+    }
+    if (forceSend || abs(lastSendMsg.ACTUAL_CONSUMPTION_REACT - currentMsg.ACTUAL_CONSUMPTION_REACT) > 0.005) {
+        send_metric("actual_consumption_reactive", currentMsg.ACTUAL_CONSUMPTION_REACT);
+    }
+    if (forceSend || abs(lastSendMsg.ACTUAL_RETURNDELIVERY_REACT - currentMsg.ACTUAL_RETURNDELIVERY_REACT) > 0.005) {
+        send_metric("actual_returndelivery_reactive", currentMsg.ACTUAL_RETURNDELIVERY_REACT);
+    }
 
-    send_metric("l1_instant_power_usage", L1_INSTANT_POWER_USAGE);
-    send_metric("l1_instant_power_delivery", L1_INSTANT_POWER_DELIVERY);
-    send_metric("l2_instant_power_usage", L2_INSTANT_POWER_USAGE);
-    send_metric("l2_instant_power_delivery", L2_INSTANT_POWER_DELIVERY);
-    send_metric("l3_instant_power_usage", L3_INSTANT_POWER_USAGE);
-    send_metric("l3_instant_power_delivery", L3_INSTANT_POWER_DELIVERY);
+    if (forceSend || abs(lastSendMsg.L1_INSTANT_POWER_USAGE - currentMsg.L1_INSTANT_POWER_USAGE) > 0.005) {
+        send_metric("l1_instant_power_usage", currentMsg.L1_INSTANT_POWER_USAGE);
+    }
+    if (forceSend || abs(lastSendMsg.L1_INSTANT_POWER_DELIVERY - currentMsg.L1_INSTANT_POWER_DELIVERY) > 0.005) {
+        send_metric("l1_instant_power_delivery", currentMsg.L1_INSTANT_POWER_DELIVERY);
+    }
+    if (forceSend || abs(lastSendMsg.L2_INSTANT_POWER_USAGE - currentMsg.L2_INSTANT_POWER_USAGE) > 0.005) {
+        send_metric("l2_instant_power_usage", currentMsg.L2_INSTANT_POWER_USAGE);
+    }
+    if (forceSend || abs(lastSendMsg.L2_INSTANT_POWER_DELIVERY - currentMsg.L2_INSTANT_POWER_DELIVERY) > 0.005) {
+        send_metric("l2_instant_power_delivery", currentMsg.L2_INSTANT_POWER_DELIVERY);
+    }
+    if (forceSend || abs(lastSendMsg.L3_INSTANT_POWER_USAGE - currentMsg.L3_INSTANT_POWER_USAGE) > 0.005) {
+        send_metric("l3_instant_power_usage", currentMsg.L3_INSTANT_POWER_USAGE);
+    }
+    if (forceSend || abs(lastSendMsg.L3_INSTANT_POWER_DELIVERY - currentMsg.L3_INSTANT_POWER_DELIVERY) > 0.005) {
+        send_metric("l3_instant_power_delivery", currentMsg.L3_INSTANT_POWER_DELIVERY);
+    }
 
-    send_metric("l1_reactive_power_usage", L1_REACT_POWER_USAGE);
-    send_metric("l1_reactive_power_delivery", L1_REACT_POWER_DELIVERY);
-    send_metric("l2_reactive_power_usage", L2_REACT_POWER_USAGE);
-    send_metric("l2_reactive_power_delivery", L2_REACT_POWER_DELIVERY);
-    send_metric("l3_reactive_power_usage", L3_REACT_POWER_USAGE);
-    send_metric("l3_reactive_power_delivery", L3_REACT_POWER_DELIVERY);
-   
-    send_metric("l1_voltage", L1_VOLTAGE);
-    send_metric("l2_voltage", L2_VOLTAGE);
-    send_metric("l3_voltage", L3_VOLTAGE);
-    send_metric("l1_instant_power_current", L1_INSTANT_POWER_CURRENT);
-    send_metric("l2_instant_power_current", L2_INSTANT_POWER_CURRENT);
-    send_metric("l3_instant_power_current", L3_INSTANT_POWER_CURRENT);
+    if (forceSend || abs(lastSendMsg.L1_REACT_POWER_USAGE - currentMsg.L1_REACT_POWER_USAGE) > 0.005) {
+        send_metric("l1_reactive_power_usage", currentMsg.L1_REACT_POWER_USAGE);
+    }
+    if (forceSend || abs(lastSendMsg.L1_REACT_POWER_DELIVERY - currentMsg.L1_REACT_POWER_DELIVERY) > 0.005) {
+        send_metric("l1_reactive_power_delivery", currentMsg.L1_REACT_POWER_DELIVERY);
+    }
+    if (forceSend || abs(lastSendMsg.L2_REACT_POWER_USAGE - currentMsg.L2_REACT_POWER_USAGE) > 0.005) {
+        send_metric("l2_reactive_power_usage", currentMsg.L2_REACT_POWER_USAGE);
+    }
+    if (forceSend || abs(lastSendMsg.L2_REACT_POWER_DELIVERY - currentMsg.L2_REACT_POWER_DELIVERY) > 0.005) {
+        send_metric("l2_reactive_power_delivery", currentMsg.L2_REACT_POWER_DELIVERY);
+    }
+    if (forceSend || abs(lastSendMsg.L3_REACT_POWER_USAGE - currentMsg.L3_REACT_POWER_USAGE) > 0.005) {
+        send_metric("l3_reactive_power_usage", currentMsg.L3_REACT_POWER_USAGE);
+    }
+    if (forceSend || abs(lastSendMsg.L3_REACT_POWER_DELIVERY - currentMsg.L3_REACT_POWER_DELIVERY) > 0.005) {
+        send_metric("l3_reactive_power_delivery", currentMsg.L3_REACT_POWER_DELIVERY);
+    }
+
+    if (forceSend || abs(lastSendMsg.L1_VOLTAGE - currentMsg.L1_VOLTAGE) > 5) {
+        send_metric("l1_voltage", currentMsg.L1_VOLTAGE);
+    }
+    if (forceSend || abs(lastSendMsg.L2_VOLTAGE - currentMsg.L2_VOLTAGE) > 5) {
+        send_metric("l2_voltage", currentMsg.L2_VOLTAGE);
+    }
+    if (forceSend || abs(lastSendMsg.L3_VOLTAGE - currentMsg.L3_VOLTAGE) > 5) {
+        send_metric("l3_voltage", currentMsg.L3_VOLTAGE);
+    }
+
+    if (forceSend || abs(lastSendMsg.L1_INSTANT_POWER_CURRENT - currentMsg.L1_INSTANT_POWER_CURRENT) > 0.005) {
+        send_metric("l1_instant_power_current", currentMsg.L1_INSTANT_POWER_CURRENT);
+    }
+    if (forceSend || abs(lastSendMsg.L2_INSTANT_POWER_CURRENT - currentMsg.L2_INSTANT_POWER_CURRENT) > 0.005) {
+        send_metric("l2_instant_power_current", currentMsg.L2_INSTANT_POWER_CURRENT);
+    }
+    if (forceSend || abs(lastSendMsg.L3_INSTANT_POWER_CURRENT - currentMsg.L3_INSTANT_POWER_CURRENT) > 0.005) {
+        send_metric("l3_instant_power_current", currentMsg.L3_INSTANT_POWER_CURRENT);
+    }
+    send_metric("RSSI", WiFi.RSSI());
+    
+    lastSendMsg = currentMsg;
+    if (forceSend) {
+        LAST_UPDATE_SENT = millis();
+    }
 #endif
+    
 }
 
 // **********************************
@@ -309,205 +400,205 @@ bool decode_telegram(int len)
     // 1-0:1.8.0 = Cumulative hourly active import energy (A+) (Q1+Q4)
     if (strncmp(telegram, "1-0:1.8.0", 9) == 0)
     {
-        CONSUMPTION = getValue(telegram, len, '(', '*');
-        addJson("consumption", CONSUMPTION);
+        currentMsg.CONSUMPTION = getValue(telegram, len, '(', '*');
+        addJson("consumption", currentMsg.CONSUMPTION);
     }
 
     // 1-0:2.8.0(000560.157*kWh)
     // 1-0:2.8.0 = Cumulative hourly active export energy (A-) (Q2+Q3)
     if (strncmp(telegram, "1-0:2.8.0", 9) == 0)
     {
-        RETURNDELIVERY = getValue(telegram, len, '(', '*');
-        addJson("returndelivery", RETURNDELIVERY);
+        currentMsg.RETURNDELIVERY = getValue(telegram, len, '(', '*');
+        addJson("returndelivery", currentMsg.RETURNDELIVERY);
     }
 
     // 1-0:3.8.0(000560.157*kWh)
     // 1-0:3.8.0 = Cumulative hourly reactive import energy (R+) (Q1+Q2)
     if (strncmp(telegram, "1-0:3.8.0", 9) == 0)
     {
-        CONSUMPTION_REACT = getValue(telegram, len, '(', '*');
-        addJson("consumption_reactive", CONSUMPTION_REACT);
+        currentMsg.CONSUMPTION_REACT = getValue(telegram, len, '(', '*');
+        addJson("consumption_reactive", currentMsg.CONSUMPTION_REACT);
     }
 
     // 1-0:4.8.0(000560.157*kWh)
     // 1-0:4.8.0 = Cumulative hourly reactive export energy (R-) (Q3+Q4)
     if (strncmp(telegram, "1-0:4.8.0", 9) == 0)
     {
-        RETURNDELIVERY_REACT = getValue(telegram, len, '(', '*');
-        addJson("returndelivery_reactive", RETURNDELIVERY_REACT);
+        currentMsg.RETURNDELIVERY_REACT = getValue(telegram, len, '(', '*');
+        addJson("returndelivery_reactive", currentMsg.RETURNDELIVERY_REACT);
     }
 
     // 1-0:1.7.0(00.424*kW)
     // 1-0:1.7.x = Momentary Active power+ (Q1+Q4)
     if (strncmp(telegram, "1-0:1.7.0", 9) == 0)
     {
-        ACTUAL_CONSUMPTION = getValue(telegram, len, '(', '*');
-        addJson("actual_consumption", ACTUAL_CONSUMPTION);
+        currentMsg.ACTUAL_CONSUMPTION = getValue(telegram, len, '(', '*');
+        addJson("actual_consumption", currentMsg.ACTUAL_CONSUMPTION);
     }
 
     // 1-0:2.7.0(00.000*kW) 
     // 1-0:2.7.x = Momentary Active power- (Q2+Q3)
     if (strncmp(telegram, "1-0:2.7.0", 9) == 0)
     {
-        ACTUAL_RETURNDELIVERY = getValue(telegram, len, '(', '*');
-        addJson("actual_returndelivery", ACTUAL_RETURNDELIVERY);
+        currentMsg.ACTUAL_RETURNDELIVERY = getValue(telegram, len, '(', '*');
+        addJson("actual_returndelivery", currentMsg.ACTUAL_RETURNDELIVERY);
     }
 
     // 1-0:3.7.0(00.424*kW)
     // 1-0:3.7.x = Momentary Reactive power + ( Q1+Q2)
     if (strncmp(telegram, "1-0:3.7.0", 9) == 0)
     {
-        ACTUAL_CONSUMPTION_REACT = getValue(telegram, len, '(', '*');
-        addJson("actual_consumption_reactive", ACTUAL_CONSUMPTION_REACT);
+        currentMsg.ACTUAL_CONSUMPTION_REACT = getValue(telegram, len, '(', '*');
+        addJson("actual_consumption_reactive", currentMsg.ACTUAL_CONSUMPTION_REACT);
     }
 
     // 1-0:4.7.0(00.000*kW) 
     // 1-0:4.7.x = Momentary Reactive power - ( Q3+Q4)
     if (strncmp(telegram, "1-0:4.7.0", 9) == 0)
     {
-        ACTUAL_RETURNDELIVERY_REACT = getValue(telegram, len, '(', '*');
-        addJson("actual_returndelivery_reactive", ACTUAL_RETURNDELIVERY_REACT);
+        currentMsg.ACTUAL_RETURNDELIVERY_REACT = getValue(telegram, len, '(', '*');
+        addJson("actual_returndelivery_reactive", currentMsg.ACTUAL_RETURNDELIVERY_REACT);
     }
 
     // 1-0:21.7.0(00.378*kW)
     // 1-0:21.7.0 = Momentary Active power+ (L1)
     if (strncmp(telegram, "1-0:21.7.0", 10) == 0)
     {
-        L1_INSTANT_POWER_USAGE = getValue(telegram, len, '(', '*');
-        addJson("l1_instant_power_usage", L1_INSTANT_POWER_USAGE);
+        currentMsg.L1_INSTANT_POWER_USAGE = getValue(telegram, len, '(', '*');
+        addJson("l1_instant_power_usage", currentMsg.L1_INSTANT_POWER_USAGE);
     }
 
     // 1-0:22.7.0(00.378*kW)
     // 1-0:22.7.0 = Momentary Active power- (L1)
     if (strncmp(telegram, "1-0:22.7.0", 10) == 0)
     {
-        L1_INSTANT_POWER_DELIVERY = getValue(telegram, len, '(', '*');
-        addJson("l1_instant_power_delivery", L1_INSTANT_POWER_DELIVERY);
+        currentMsg.L1_INSTANT_POWER_DELIVERY = getValue(telegram, len, '(', '*');
+        addJson("l1_instant_power_delivery", currentMsg.L1_INSTANT_POWER_DELIVERY);
     }
 
     // 1-0:41.7.0(00.378*kW)
     // 1-0:41.7.0 = Momentary Active power+ (L2)
     if (strncmp(telegram, "1-0:41.7.0", 10) == 0)
     {
-        L2_INSTANT_POWER_USAGE = getValue(telegram, len, '(', '*');
-        addJson("l2_instant_power_usage", L2_INSTANT_POWER_USAGE);
+        currentMsg.L2_INSTANT_POWER_USAGE = getValue(telegram, len, '(', '*');
+        addJson("l2_instant_power_usage", currentMsg.L2_INSTANT_POWER_USAGE);
     }
 
     // 1-0:42.7.0(00.378*kW)
     // 1-0:42.7.0 = Momentary Active power- (L2)
     if (strncmp(telegram, "1-0:42.7.0", 10) == 0)
     {
-        L2_INSTANT_POWER_DELIVERY = getValue(telegram, len, '(', '*');
-        addJson("l2_instant_power_delivery", L2_INSTANT_POWER_DELIVERY);
+        currentMsg.L2_INSTANT_POWER_DELIVERY = getValue(telegram, len, '(', '*');
+        addJson("l2_instant_power_delivery", currentMsg.L2_INSTANT_POWER_DELIVERY);
     }
 
     // 1-0:61.7.0(00.378*kW)
     // 1-0:61.7.0 = Momentary Active power+ (L3)
     if (strncmp(telegram, "1-0:61.7.0", 10) == 0)
     {
-        L3_INSTANT_POWER_USAGE = getValue(telegram, len, '(', '*');
-        addJson("l3_instant_power_usage", L3_INSTANT_POWER_USAGE);
+        currentMsg.L3_INSTANT_POWER_USAGE = getValue(telegram, len, '(', '*');
+        addJson("l3_instant_power_usage", currentMsg.L3_INSTANT_POWER_USAGE);
     }
 
     // 1-0:62.7.0(00.378*kW)
     // 1-0:62.7.0 = Momentary Active power- (L3)
     if (strncmp(telegram, "1-0:62.7.0", 10) == 0)
     {
-        L3_INSTANT_POWER_DELIVERY = getValue(telegram, len, '(', '*');
-        addJson("l3_instant_power_delivery", L3_INSTANT_POWER_DELIVERY);
+        currentMsg.L3_INSTANT_POWER_DELIVERY = getValue(telegram, len, '(', '*');
+        addJson("l3_instant_power_delivery", currentMsg.L3_INSTANT_POWER_DELIVERY);
     }
 
     // 1-0:23.7.0(00.378*kW)
     // 1-0:23.7.0 = Momentary Reactive power+ (L1)
     if (strncmp(telegram, "1-0:23.7.0", 10) == 0)
     {
-        L1_REACT_POWER_USAGE = getValue(telegram, len, '(', '*');
-        addJson("l1_reactive_power_usage", L1_REACT_POWER_USAGE);
+        currentMsg.L1_REACT_POWER_USAGE = getValue(telegram, len, '(', '*');
+        addJson("l1_reactive_power_usage", currentMsg.L1_REACT_POWER_USAGE);
     }
 
     // 1-0:24.7.0(00.378*kW)
     // 1-0:24.7.0 = Momentary Reactive power- (L1)
     if (strncmp(telegram, "1-0:24.7.0", 10) == 0)
     {
-        L1_REACT_POWER_DELIVERY = getValue(telegram, len, '(', '*');
-        addJson("l1_reactive_power_delivery", L1_REACT_POWER_DELIVERY);
+        currentMsg.L1_REACT_POWER_DELIVERY = getValue(telegram, len, '(', '*');
+        addJson("l1_reactive_power_delivery", currentMsg.L1_REACT_POWER_DELIVERY);
     }
 
     // 1-0:43.7.0(00.378*kW)
     // 1-0:43.7.0 = Momentary Reactive power+ (L2)
     if (strncmp(telegram, "1-0:43.7.0", 10) == 0)
     {
-        L2_REACT_POWER_USAGE = getValue(telegram, len, '(', '*');
-        addJson("l2_reactive_power_usage", L2_REACT_POWER_USAGE);
+        currentMsg.L2_REACT_POWER_USAGE = getValue(telegram, len, '(', '*');
+        addJson("l2_reactive_power_usage", currentMsg.L2_REACT_POWER_USAGE);
     }
 
     // 1-0:44.7.0(00.378*kW)
     // 1-0:44.7.0 = Momentary Reactive power+ (L2)
     if (strncmp(telegram, "1-0:44.7.0", 10) == 0)
     {
-        L2_REACT_POWER_DELIVERY = getValue(telegram, len, '(', '*');
-        addJson("l2_reactive_power_delivery", L2_REACT_POWER_DELIVERY);
+        currentMsg.L2_REACT_POWER_DELIVERY = getValue(telegram, len, '(', '*');
+        addJson("l2_reactive_power_delivery", currentMsg.L2_REACT_POWER_DELIVERY);
     }
 
     // 1-0:63.7.0(00.378*kW)
     // 1-0:63.7.0 = Momentary Reactive power+ (L3)
     if (strncmp(telegram, "1-0:63.7.0", 10) == 0)
     {
-        L3_REACT_POWER_USAGE = getValue(telegram, len, '(', '*');
-        addJson("l3_reactive_power_usage", L3_REACT_POWER_USAGE);
+        currentMsg.L3_REACT_POWER_USAGE = getValue(telegram, len, '(', '*');
+        addJson("l3_reactive_power_usage", currentMsg.L3_REACT_POWER_USAGE);
     }
 
     // 1-0:64.7.0(00.378*kW)
     // 1-0:64.7.0 = Momentary Reactive power- (L3)
     if (strncmp(telegram, "1-0:64.7.0", 10) == 0)
     {
-        L3_REACT_POWER_DELIVERY = getValue(telegram, len, '(', '*');
-        addJson("l3_reactive_power_delivery", L3_REACT_POWER_DELIVERY);
+        currentMsg.L3_REACT_POWER_DELIVERY = getValue(telegram, len, '(', '*');
+        addJson("l3_reactive_power_delivery", currentMsg.L3_REACT_POWER_DELIVERY);
     }
 
     // 1-0:31.7.0(002*A)
     // 1-0:31.7.0 = Momentary RMS Current phase L1
     if (strncmp(telegram, "1-0:31.7.0", 10) == 0)
     {
-        L1_INSTANT_POWER_CURRENT = getValue(telegram, len, '(', '*');
-        addJson("l1_instant_power_current", L1_INSTANT_POWER_CURRENT);
+        currentMsg.L1_INSTANT_POWER_CURRENT = getValue(telegram, len, '(', '*');
+        addJson("l1_instant_power_current", currentMsg.L1_INSTANT_POWER_CURRENT);
     }
     // 1-0:51.7.0(002*A)
     // 1-0:51.7.0 = Momentary RMS Current phase L2
     if (strncmp(telegram, "1-0:51.7.0", 10) == 0)
     {
-        L2_INSTANT_POWER_CURRENT = getValue(telegram, len, '(', '*');
-        addJson("l2_instant_power_current", L2_INSTANT_POWER_CURRENT);
+        currentMsg.L2_INSTANT_POWER_CURRENT = getValue(telegram, len, '(', '*');
+        addJson("l2_instant_power_current", currentMsg.L2_INSTANT_POWER_CURRENT);
     }
     
     // 1-0:71.7.0(002*A)
     // 1-0:71.7.0 = Momentary RMS Current phase L3
     if (strncmp(telegram, "1-0:71.7.0", 10) == 0)
     {
-        L3_INSTANT_POWER_CURRENT = getValue(telegram, len, '(', '*');
-        addJson("l3_instant_power_current", L3_INSTANT_POWER_CURRENT);
+        currentMsg.L3_INSTANT_POWER_CURRENT = getValue(telegram, len, '(', '*');
+        addJson("l3_instant_power_current", currentMsg.L3_INSTANT_POWER_CURRENT);
     }
 
     // 1-0:32.7.0(232.0*V)
     // 1-0:32.7.0 = Momentary RMS Phase voltage L1
     if (strncmp(telegram, "1-0:32.7.0", 10) == 0)
     {
-        L1_VOLTAGE = getValue(telegram, len, '(', '*');
-        addJson("l1_voltage", L1_VOLTAGE);
+        currentMsg.L1_VOLTAGE = getValue(telegram, len, '(', '*');
+        addJson("l1_voltage", currentMsg.L1_VOLTAGE);
     }
     // 1-0:52.7.0(232.0*V)
     // 1-0:52.7.0 = Momentary RMS Phase voltage L2
     if (strncmp(telegram, "1-0:52.7.0", 10) == 0)
     {
-        L2_VOLTAGE = getValue(telegram, len, '(', '*');
-        addJson("l2_voltage", L2_VOLTAGE);
+        currentMsg.L2_VOLTAGE = getValue(telegram, len, '(', '*');
+        addJson("l2_voltage", currentMsg.L2_VOLTAGE);
     }   
     // 1-0:72.7.0(232.0*V)
     // 1-0:72.7.0 = Momentary RMS Phase voltage L3
     if (strncmp(telegram, "1-0:72.7.0", 10) == 0)
     {
-        L3_VOLTAGE = getValue(telegram, len, '(', '*');
-        addJson("l3_voltage", L3_VOLTAGE);
+        currentMsg.L3_VOLTAGE = getValue(telegram, len, '(', '*');
+        addJson("l3_voltage",currentMsg. L3_VOLTAGE);
     }
 
     return validCRCFound;
@@ -525,7 +616,16 @@ void read_p1_hardwareserial()
             int len = Serial.readBytesUntil('\n', telegram, P1_MAXLINELENGTH);
             ESP.wdtEnable(1);
 
-            processLine(len);
+            if (len > 0) {
+                processLine(len);
+            }
+        }
+    }
+    else {
+        // send RSSI also even if no telegram messages seen
+        if ((LAST_UPDATE_SENT == 0 && millis() > 15000) || (unsigned long)(millis() - (LAST_UPDATE_SENT)) > (UPDATE_INTERVAL+15000)) {
+            send_metric("RSSI", WiFi.RSSI());
+            LAST_UPDATE_SENT = millis();
         }
     }
 }
@@ -538,7 +638,6 @@ void processLine(int len) {
     bool result = decode_telegram(len + 1);
     if (result) {
         send_data_to_broker();
-        LAST_UPDATE_SENT = millis();
     }
 }
 
@@ -574,6 +673,13 @@ void write_eeprom(int offset, int len, String value)
     }
 }
 
+void resetConfig() {
+    for (int i=0; i< 135; i++) {
+        EEPROM.write(i, 0);
+    }
+    EEPROM.commit();
+}
+
 // ******************************************
 // * Callback for saving WIFI config        *
 // ******************************************
@@ -593,8 +699,6 @@ void save_wifi_config_callback ()
 
 void setup_ota()
 {
-    Serial.println(F("Arduino OTA activated."));
-
     // * Port defaults to 8266
     ArduinoOTA.setPort(8266);
 
@@ -633,7 +737,6 @@ void setup_ota()
     });
 
     ArduinoOTA.begin();
-    Serial.println(F("Arduino OTA finished"));
 }
 
 // **********************************
@@ -657,6 +760,9 @@ void setup_mdns()
 
 void setup()
 {
+#ifdef KResetPin
+    pinMode(KResetPin, INPUT_PULLUP);
+#endif
     // * Configure EEPROM
     EEPROM.begin(512);
 
@@ -770,12 +876,46 @@ void setup()
 
 }
 
+void checkResetButton()
+{
+#ifdef KResetPin
+    if (digitalRead(KResetPin) == LOW)
+    {
+        Serial.println("reset pressed");
+        delay(50);
+        unsigned long starttime = millis();
+        while (digitalRead(KResetPin) == LOW)
+        {
+            delay(50);
+            if ((unsigned long)(millis() - starttime) > 5000)
+            {
+                // 5 sec pressed, do reset settings and reboot
+                Serial.println("Reset settings");
+                Serial.flush();
+                resetConfig();
+                WiFiManager wifiManager;
+                wifiManager.resetSettings();
+                //turn off led
+                digitalWrite(LED_BUILTIN, HIGH); // active LOW
+                delay(2000);
+                // turn on led
+                digitalWrite(LED_BUILTIN, LOW);
+                delay(100);
+                wifiManager.reboot();
+            }
+        }
+        Serial.println("reset aborted");
+    }
+#endif
+}
+
 // **********************************
 // * Loop                           *
 // **********************************
 
 void loop()
 {
+    checkResetButton();
     ArduinoOTA.handle();
     long now = millis();
 
@@ -788,15 +928,13 @@ void loop()
             if (mqtt_reconnect())
             {
                 LAST_RECONNECT_ATTEMPT = 0;
+                LAST_UPDATE_SENT = 0;
             }
         }
     }
     else
     {
         mqtt_client.loop();
-    }
-    
-    if (now - LAST_UPDATE_SENT > UPDATE_INTERVAL) {
         read_p1_hardwareserial();
     }
 }
